@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# create-rstack — scaffold a zero-Node, Zig-native full-stack app.
+#
+# Same shape as create-t3-app: collect choices, copy a BASE template, then run
+# the modular per-layer INSTALLERS the user selected. Each installer wires one
+# layer (data = merv reactive engine + WASM client, web = merjs shell, valid =
+# dhi). The opinions live here so the pieces compose.
+set -euo pipefail
+
+APP="${1:-}"; shift || true
+WANT_DATA=1; WANT_WEB=1; WANT_VALID=1; DO_GIT=1
+for a in "$@"; do case "$a" in
+  --no-data) WANT_DATA=0;; --no-web) WANT_WEB=0;; --no-valid) WANT_VALID=0;;
+  --no-git) DO_GIT=0;; --data) WANT_DATA=1;; --web) WANT_WEB=1;; --valid) WANT_VALID=1;;
+esac; done
+
+if [ -z "$APP" ]; then printf "app name: "; read -r APP; fi
+[ -n "$APP" ] || { echo "create-rstack: need an app name"; exit 1; }
+[ -e "$APP" ] && { echo "create-rstack: $APP already exists"; exit 1; }
+
+say(){ printf "\033[38;5;208m▸\033[0m %s\n" "$1"; }
+
+# ── base template ────────────────────────────────────────────────────────────
+say "scaffolding base → $APP/"
+mkdir -p "$APP"
+cat > "$APP/build.zig.zon" <<EOF
+.{
+    .name = .$APP,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        // merjs (web shell) and merv (reactive data) are wired in build.zig.
+        // Pin to git refs or vendor under packages/ — see README.
+    },
+    .paths = .{""},
+}
+EOF
+cat > "$APP/.gitignore" <<EOF
+.zig-cache/
+zig-out/
+EOF
+
+# ── one source of types: the schema every layer reads ────────────────────────
+cat > "$APP/schema.zig" <<'EOF'
+//! schema.zig — the ONE source of types. The DB, the reactive engine, the API,
+//! the SSR pass, and the WASM client all read this. Change a field here and it
+//! flows, by construction, to every layer.
+const std = @import("std");
+
+pub const Item = struct {
+    id: u64,
+    title: []const u8,
+};
+
+pub fn key(it: Item) u64 {
+    return it.id;
+}
+EOF
+
+# ── modular installers (one per selected layer) ──────────────────────────────
+if [ "$WANT_DATA" = 1 ]; then
+  say "+ data   → merv reactive engine + WASM client"
+  mkdir -p "$APP/data"
+  cat > "$APP/data/README.md" <<'EOF'
+# data layer — merv
+
+Reactive live queries. The server runs a `Table(Item)` reactor over `schema.zig`;
+clients subscribe and receive row-level deltas over a binary wire. The client
+compiles to `wasm32-freestanding` and decodes deltas in the browser — see the
+proven seam in merv (`tools/wasm_check.mjs`). For reactive nearest-neighbour
+(AI/multimodal), use `merv.Knn(Row, Dim)`.
+
+Wire merv via build.zig.zon (git ref) or vendor under packages/merv.
+EOF
+fi
+if [ "$WANT_WEB" = 1 ]; then
+  say "+ web    → merjs shell (file routing, SSR, WASM client)"
+  mkdir -p "$APP/app" "$APP/client"
+  cat > "$APP/app/index.zig" <<'EOF'
+//! app/index.zig — merjs file route for "/". Export render(); merjs codegen
+//! wires the dispatch table. SSR on the server; the client/ logic ships as WASM.
+const mer = @import("mer");
+
+pub fn render(_: mer.Request) mer.Response {
+    const h = mer.h;
+    const page = h.div(.{ .class = "rstack" }, .{
+        h.h1(.{}, "rstack"),
+        h.p(.{ .id = "live" }, "subscribing to a merv reactive query…"),
+    });
+    return mer.html(page);
+}
+EOF
+  cat > "$APP/client/live.zig" <<'EOF'
+//! client/live.zig — ships as WASM (no bundler). Decodes merv delta frames and
+//! patches the DOM. The reactive client is merv's wasm export surface; this glue
+//! reads its live view and writes the #live node. See merv examples/recall/wasm.zig.
+export fn on_frame(ptr: [*]const u8, len: usize) void {
+    _ = ptr;
+    _ = len;
+    // merv_apply(len) → read recall_count()/recall_text_ptr(i) → patch DOM
+}
+EOF
+fi
+if [ "$WANT_VALID" = 1 ]; then
+  say "+ valid  → dhi (Zig + SIMD WASM validation)"
+  cat >> "$APP/schema.zig" <<'EOF'
+
+// Validation (dhi): constrain inputs at parse time, checked comptime.
+//   const ItemModel = mer.dhi.Model("Item", .{ .title = mer.dhi.Str(.{ .min_length = 1 }) });
+EOF
+fi
+
+cat > "$APP/README.md" <<EOF
+# $APP
+
+A [rstack](https://github.com/lekt9/rstack) app — zero-Node, Zig-native.
+One schema (\`schema.zig\`) feeds every layer.
+
+\`\`\`bash
+zig build          # SSR server + WASM client
+\`\`\`
+
+Layers wired: $([ "$WANT_WEB" = 1 ] && echo -n "web(merjs) ")$([ "$WANT_DATA" = 1 ] && echo -n "data(merv) ")$([ "$WANT_VALID" = 1 ] && echo -n "valid(dhi)")
+
+> merjs targets Zig 0.15.1. The merv data layer + WASM client are
+> toolchain-independent (merv → wasm on 0.16). See rstack README for the
+> single-toolchain reconciliation status.
+EOF
+
+[ "$DO_GIT" = 1 ] && { (cd "$APP" && git init -q && git add -A && git commit -qm "init $APP (rstack)") || true; }
+
+say "done. next:"
+echo "    cd $APP"
+echo "    zig build"
