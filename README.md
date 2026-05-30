@@ -78,11 +78,18 @@ installers.
   bench-gated; WASM client proven in a JS runtime.
 - ✅ **The seam** — server delta frame → WASM client view, one wire, verified.
 - ✅ **`create-rstack`** — scaffolds the rstack project shape (base + installers).
-- ⏳ **Single-toolchain workspace** — merjs targets Zig 0.15.1, merv targets
-  0.16. A scaffolded app's merjs build needs 0.15.1 today; aligning both on one
-  Zig is the reconciliation wave. The data layer + seam are toolchain-independent
-  (merv → wasm on 0.16).
-- ⏳ **turbodb persistence + turboapi-core routing** — wiring waves.
+- ✅ **Single-toolchain workspace** — both frameworks build on **Zig 0.15.1**
+  with zero porting (merv also builds on 0.16, so it spans both). `workspace/`
+  is the proof: one executable imports **both** `merv` (reactor + router + WAL)
+  and merjs's `mer` module and compiles+runs on one toolchain. `cd workspace &&
+  zig build run`.
+- ✅ **Durability** — merv write-ahead log + crash-safe recovery (`merv:
+  zig build walcheck`).
+- ✅ **Routing (turboAPI merge)** — radix/segment router with params + wildcard,
+  method-indexed (`merv: zig build routercheck`).
+- ⏳ **Schema codegen + app cutover** — generate the per-schema codec from a
+  declarative `schema.zig`, then port a real app's schema/queries. The unreel
+  app cutover is a separate private arc (its live beta is untouched).
 
 MIT. Built on the work of [@justrach](https://github.com/justrach) (merjs, dhi,
 turboAPI, turbodb) and [merv](https://github.com/lekt9/merv).
